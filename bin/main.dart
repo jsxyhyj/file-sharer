@@ -18,7 +18,13 @@ Future<void> main(List<String> args) async {
     ..addFlag('all', abbr: 'a', help: '显示所有文件，默认仅显示非隐藏文件', negatable: false)
     ..addFlag('version', abbr: 'v', help: '显示版本信息', negatable: false)
     ..addFlag('help', abbr: 'h', help: '显示此帮助信息', negatable: false);
-  final results = parser.parse(args);
+  ArgResults results;
+  try {
+    results = parser.parse(args);
+  } on ArgParserException {
+    stderr.writeln('选项或参数错误');
+    return;
+  }
   final p = results['port'];
   if (p != null) {
     port = int.tryParse(p);
