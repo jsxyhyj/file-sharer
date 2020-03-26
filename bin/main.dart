@@ -158,6 +158,14 @@ Future<void> responseDirectory(
 Future<void> responseFile(
     HttpResponse resp, String path, List<String> ranges) async {
   final f = File(path);
+  // 检查权限
+  try {
+    final fs = f.openRead(0, 0);
+    await fs.forEach((_) {});
+  } on FileSystemException {
+    resp.statusCode = HttpStatus.unauthorized;
+    return;
+  }
   final len = await f.length();
   var start = 0;
   var end = len - 1;
@@ -193,17 +201,9 @@ Future<void> responseFile(
       resp.statusCode = HttpStatus.requestedRangeNotSatisfiable;
       return;
     }
-  }
-  // 检查权限
-  try {
-    final fs = f.openRead(0, 0);
-    await fs.forEach((_) {});
-  } on FileSystemException {
-    resp.statusCode = HttpStatus.unauthorized;
-    return;
+    resp.statusCode = HttpStatus.partialContent;
   }
   final filename = Uri.encodeComponent(p.basename(path));
-  resp.statusCode = HttpStatus.partialContent;
   resp.headers
     ..contentType = ContentType.binary
     ..contentLength = end - start + 1
