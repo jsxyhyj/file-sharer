@@ -1,49 +1,51 @@
 import 'dart:async';
 import 'dart:io';
+import 'dart:math';
 
 import 'package:args/args.dart';
 import 'package:intl/intl.dart';
 import 'package:path/path.dart' as p;
 
-final range_regexp = RegExp(r'^bytes=(\d+)-(\d*)$');
 final date_format = DateFormat('y/MM/dd HH:mm:ss');
 
 var home = Platform.environment[Platform.isWindows ? 'USERPROFILE' : 'HOME'];
-var port = 80;
+var port = bool.fromEnvironment('dart.vm.product') ? 80 : 8000;
 var all_files = false;
 
 Future<void> main(List<String> args) async {
-  final parser = ArgParser()
-    ..addOption('port', abbr: 'p', help: '监听端口，默认为 80')
-    ..addFlag('all', abbr: 'a', help: '显示所有文件，默认仅显示非隐藏文件', negatable: false)
-    ..addFlag('version', abbr: 'v', help: '显示版本信息', negatable: false)
-    ..addFlag('help', abbr: 'h', help: '显示此帮助信息', negatable: false);
-  ArgResults results;
-  try {
-    results = parser.parse(args);
-  } on ArgParserException {
-    stderr.writeln('选项或参数错误');
-    return;
-  }
-  final p = results['port'];
-  if (p != null) {
-    port = int.tryParse(p);
-  }
-  all_files = results['all'];
-  if (results['version']) {
-    stdout.writeln('${Platform.executable} 1.0.0');
-    return;
-  }
-  if (results['help']) {
-    stdout
-      ..writeln('用法：${Platform.executable} [-p port] [-a] [home]')
-      ..writeln()
-      ..writeln('选项：')
-      ..writeln(parser.usage);
-    return;
-  }
-  if (results.rest.isNotEmpty) {
-    home = results.rest[0];
+  {
+    final parser = ArgParser()
+      ..addOption('port', abbr: 'p', help: '监听端口，默认为 80')
+      ..addFlag('all', abbr: 'a', help: '显示所有文件，默认仅显示非隐藏文件', negatable: false)
+      ..addFlag('help', abbr: 'h', help: '显示此帮助信息', negatable: false)
+      ..addFlag('version', abbr: 'v', help: '显示版本信息', negatable: false);
+    ArgResults results;
+    try {
+      results = parser.parse(args);
+    } on ArgParserException {
+      stderr.writeln('选项或参数错误');
+      return;
+    }
+    final p = results['port'];
+    if (p != null) {
+      port = int.tryParse(p);
+    }
+    all_files = results['all'];
+    if (results['help']) {
+      stdout
+        ..writeln('用法：${Platform.executable} [-p port] [-a] [home]')
+        ..writeln()
+        ..writeln('选项：')
+        ..writeln(parser.usage);
+      return;
+    }
+    if (results['version']) {
+      stdout.writeln('${Platform.executable} 1.0.0');
+      return;
+    }
+    if (results.rest.isNotEmpty) {
+      home = results.rest[0];
+    }
   }
   if (port == null) {
     stderr.writeln('端口错误');
@@ -57,23 +59,16 @@ Future<void> main(List<String> args) async {
 }
 
 Future<void> startServer() async {
-  final server = await HttpServer.bind('0.0.0.0', port);
+  final server = await HttpServer.bind('0.0.0.0', port, backlog: 16);
   await showTips();
-  await for (var req in server) {
-    final f = Future(() => handleRequest(req));
-  }
+  server.listen(handleRequest);
 }
 
 Future<void> showTips() async {
   log('服务已启动，可使用以下地址访问：');
+  printAddress('127.0.0.1');
   final nis = await NetworkInterface.list(type: InternetAddressType.IPv4);
-  if (nis.isNotEmpty) {
-    for (var ni in nis) {
-      printAddress(ni.addresses[0].address);
-    }
-  } else {
-    printAddress('127.0.0.1');
-  }
+  nis?.forEach((ni) => printAddress(ni.addresses[0].address));
 }
 
 void printAddress(String address) {
@@ -89,7 +84,7 @@ Future<void> handleRequest(HttpRequest req) async {
   try {
     final localPath =
         p.join(home, uriPath.startsWith('/') ? uriPath.substring(1) : uriPath);
-    final stat = FileStat.statSync(localPath);
+    final stat = await FileStat.stat(localPath);
     if (req.method != 'GET') {
       resp.statusCode = HttpStatus.methodNotAllowed;
     } else {
@@ -103,7 +98,8 @@ Future<void> handleRequest(HttpRequest req) async {
           }
           break;
         case FileSystemEntityType.file:
-          await responseFile(resp, localPath, req.headers['Range']);
+          await responseFile(
+              resp, localPath, req.headers[HttpHeaders.rangeHeader]);
           break;
         default:
           resp.statusCode = HttpStatus.notFound;
@@ -126,7 +122,7 @@ Future<void> responseDirectory(
     await for (var entity in Directory(path).list(followLinks: false)) {
       var basename = p.basename(entity.path);
       if (all_files || !isFileHidden(basename)) {
-        final stat = entity.statSync();
+        final stat = await entity.stat();
         if (stat.type == FileSystemEntityType.directory) {
           dirs.add(basename + '/');
         } else {
@@ -161,9 +157,8 @@ Future<void> responseDirectory(
 
 Future<void> responseFile(
     HttpResponse resp, String path, List<String> ranges) async {
-  final filename = Uri.encodeComponent(p.basename(path));
   final f = File(path);
-  final len = f.lengthSync();
+  final len = await f.length();
   var start = 0;
   var end = len - 1;
   if (ranges != null) {
@@ -171,34 +166,44 @@ Future<void> responseFile(
       resp.statusCode = HttpStatus.requestedRangeNotSatisfiable;
       return;
     }
-    final match = range_regexp.firstMatch(ranges[0]);
-    if (match == null) {
+    // 这里不用正则表达式了，性能差
+    final range = ranges[0];
+    if (!range.startsWith('bytes=')) {
       resp.statusCode = HttpStatus.requestedRangeNotSatisfiable;
       return;
     }
-    start = int.parse(match.group(1));
-    final endGroup = match.group(2);
-    if (endGroup != null && endGroup.isNotEmpty) {
-      end = int.parse(endGroup);
+    // bytes= 后面
+    var index = 6;
+    var lastIndex = checkLastNumber(range, index);
+    if (lastIndex == index) {
+      resp.statusCode = HttpStatus.requestedRangeNotSatisfiable;
+      return;
     }
-    // 容错处理
-    if (end >= len) {
-      end = len - 1;
+    if (lastIndex == range.length || range[lastIndex] != '-') {
+      resp.statusCode = HttpStatus.requestedRangeNotSatisfiable;
+      return;
+    }
+    start = parseInt(range, index, lastIndex);
+    index = lastIndex + 1;
+    lastIndex = checkLastNumber(range, index);
+    if (lastIndex != index) {
+      end = min(parseInt(range, index, lastIndex), end);
     }
     if (start > end) {
       resp.statusCode = HttpStatus.requestedRangeNotSatisfiable;
       return;
     }
-    resp.statusCode = HttpStatus.partialContent;
   }
   // 检查权限
   try {
-    final fs = await f.openRead(0, 1);
-    await fs.isEmpty;
+    final fs = f.openRead(0, 0);
+    await fs.forEach((_) {});
   } on FileSystemException {
     resp.statusCode = HttpStatus.unauthorized;
     return;
   }
+  final filename = Uri.encodeComponent(p.basename(path));
+  resp.statusCode = HttpStatus.partialContent;
   resp.headers
     ..contentType = ContentType.binary
     ..contentLength = end - start + 1
