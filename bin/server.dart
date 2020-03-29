@@ -1,7 +1,10 @@
 import 'dart:io';
 import 'dart:math';
+
 import 'package:filesize/filesize.dart';
+import 'package:http_server/http_server.dart';
 import 'package:intl/intl.dart';
+import 'package:mime/mime.dart';
 import 'package:path/path.dart' as p;
 
 import 'file_item.dart';
@@ -41,25 +44,12 @@ class Server {
     final resp = req.response;
     try {
       final localPath = p.join(_home, uriPath.startsWith('/') ? uriPath.substring(1) : uriPath);
-      final stat = await FileStat.stat(localPath);
-      if (req.method != 'GET') {
-        resp.statusCode = HttpStatus.methodNotAllowed;
+      if (req.method == 'GET') {
+        await _doGet(req, resp, uriPath, localPath);
+      } else if (req.method == 'POST') {
+        await _doPost(req, resp, localPath);
       } else {
-        switch (stat.type) {
-          case FileSystemEntityType.directory:
-            // uriPath 必须以 '/' 结尾，否则输出的 html 中的相对路径无法访问
-            if (uriPath.endsWith('/')) {
-              await _responseDirectory(resp, localPath, uriPath);
-            } else {
-              await resp.redirect(Uri.parse(uriPath + '/'));
-            }
-            break;
-          case FileSystemEntityType.file:
-            await _responseFile(resp, localPath, req.headers[HttpHeaders.rangeHeader]);
-            break;
-          default:
-            resp.statusCode = HttpStatus.notFound;
-        }
+        resp.statusCode = HttpStatus.methodNotAllowed;
       }
       await resp.flush();
       final date = _date_format.format(DateTime.now());
@@ -70,6 +60,43 @@ class Server {
     } finally {
       await resp.close();
     }
+  }
+
+  Future<void> _doGet(HttpRequest req, HttpResponse resp, String uriPath, String localPath) async {
+    final stat = await FileStat.stat(localPath);
+    switch (stat.type) {
+      case FileSystemEntityType.directory:
+        // uriPath 必须以 '/' 结尾，否则输出的 html 中的相对路径无法访问
+        if (uriPath.endsWith('/')) {
+          await _responseDirectory(resp, localPath, uriPath);
+        } else {
+          await resp.redirect(Uri.parse(uriPath + '/'), status: HttpStatus.movedPermanently);
+        }
+        break;
+      case FileSystemEntityType.file:
+        await _responseFile(resp, localPath, req.headers[HttpHeaders.rangeHeader]);
+        break;
+      default:
+        resp.statusCode = HttpStatus.notFound;
+    }
+  }
+
+  Future<void> _doPost(HttpRequest req, HttpResponse resp, String localPath) async {
+    var boundary = req.headers.contentType.parameters['boundary'];
+    var stream = await MimeMultipartTransformer(boundary).bind(req).map(HttpMultipartFormData.parse);
+    await for (var data in stream) {
+      final filename = data.contentDisposition.parameters['filename'];
+      final ios = File(p.join(localPath, filename)).openWrite();
+      try {
+        await for (var part in data) {
+          ios.add(part);
+        }
+        await ios.flush();
+      } finally {
+        await ios.close();
+      }
+    }
+    await resp.redirect(req.uri, status: HttpStatus.movedPermanently);
   }
 
   Future<void> _responseDirectory(HttpResponse resp, String path, String uriPath) async {
@@ -94,26 +121,37 @@ class Server {
     }
     dirs.sort(comparePath);
     files.sort((a, b) => comparePath(a.name, b.name));
-    final title = 'Directory listing for ${uriPath}';
-    final dirToHtml = (String dir) => '<tr><td><a href="${dir}">${dir}</a></td></tr>';
-    final fileToHtml = (FileItem item) =>
-        '<tr><td><a href="${item.name}">${item.name}</a></td><td><pre>&#9;</pre></td><td>${filesize(item.length)}</td></tr>';
     resp.headers.contentType = ContentType.html;
+    _writeHtml(resp, uriPath, dirs, files);
+  }
+
+  void _writeHtml(HttpResponse resp, String path, List<String> dirs, List<FileItem> files) {
+    final title = 'Directory listing for ${path}';
+    final dirToHtml = (String dir) => '<li><a href="${dir}">${dir}</a></li>';
+    final fileToHtml = (FileItem item) =>
+        '<li><a href="${item.name}">${item.name}</a>&nbsp;<span>(${filesize(item.length)})</span></li>';
     resp
       ..write('<head>')
       ..write('<meta name="viewport" content="width=device-width,initial-scale=1.0,minimum-scale=1.0"/>')
       ..write('<title>${title}</title>')
-      ..write('<style type="text/css">a{text-decoration:none} a:hover{text-decoration:underline}</style>')
+      ..write(
+          '<style type="text/css">a{text-decoration:none} a:hover{text-decoration:underline} span{color:#666666}</style>')
+      ..write('<script type="text/javascript">')
+      ..write('function upload(){var e=document.getElementById(\'fname\');return e.files[0]!=null;}')
+      ..write('</script>')
       ..write('</head>')
       ..write('<body>')
       ..write('<h2>${title}</h2>')
       ..write('<hr>')
-      ..write('<table cellspacing="0" cellpadding="0"><tbody>')
+      ..write('<form method="post" enctype="multipart/form-data" onsubmit="return upload();">')
+      ..write('<input id="fname" name="fname" type="file">')
+      ..write('<input type="submit" value="上传">')
+      ..write('</form>')
+      ..write('<ul>')
       ..writeAll(dirs.map<String>(dirToHtml))
       ..writeAll(files.map<String>(fileToHtml))
-      ..write('</tbody></table>')
-      ..write('</body>')
-      ..toString();
+      ..write('</ul>')
+      ..write('</body>');
   }
 
   Future<void> _responseFile(HttpResponse resp, String path, List<String> ranges) async {

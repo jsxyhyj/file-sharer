@@ -1,6 +1,6 @@
 name: file_sharer
 description: file_sharer
-version: 1.0.1
+version: 1.0.2
 # homepage: https://www.example.com
 
 environment:
@@ -11,6 +11,8 @@ dependencies:
   path: ^1.6.4
   intl: ^0.16.1
   filesize: ^1.0.4
+  http_server: ^0.9.8+3
+  mime: ^0.9.6+3
 
 dev_dependencies:
   pedantic: ^1.8.0

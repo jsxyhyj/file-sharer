@@ -37,7 +37,7 @@ Future<void> main(List<String> args) async {
       return;
     }
     if (results['version']) {
-      stdout.writeln('${Platform.executable} 1.0.1');
+      stdout.writeln('${Platform.executable} 1.0.2');
       return;
     }
     if (results.rest.isNotEmpty) {
