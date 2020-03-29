@@ -3,8 +3,8 @@ import 'dart:io';
 
 import 'package:args/args.dart';
 
-import 'server.dart';
-import 'util.dart';
+import 'src/server.dart';
+import 'src/util.dart';
 
 Future<void> main(List<String> args) async {
   var home = Platform.environment[Platform.isWindows ? 'USERPROFILE' : 'HOME'];
