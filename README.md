@@ -14,6 +14,10 @@ file-sharer /
 ```bash
 file-sharer -p 8000 -a .
 ```
+查看帮助信息：
+```bash
+file-sharer -h
+```
 在终端里按下 Ctrl + C 即可停止共享。
 
 # Windows
