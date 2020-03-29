@@ -96,8 +96,8 @@ class Server {
     files.sort((a, b) => comparePath(a.name, b.name));
     final title = 'Directory listing for ${uriPath}';
     final dirToHtml = (String dir) => '<tr><td><a href="${dir}">${dir}</a></td></tr>';
-    final fileToHtml = (FileItem file) =>
-        '<tr><td><a href="${file.name}">${file.name}</a></td><td><pre>&#9;</pre></td><td>${filesize(file.length)}</td></tr>';
+    final fileToHtml = (FileItem item) =>
+        '<tr><td><a href="${item.name}">${item.name}</a></td><td><pre>&#9;</pre></td><td>${filesize(item.length)}</td></tr>';
     resp.headers.contentType = ContentType.html;
     resp
       ..write('<head>')
@@ -157,19 +157,28 @@ class Server {
       if (lastIndex != index) {
         end = min(parseInt(range, index, lastIndex), end);
       }
-      if (start > end) {
+      if ((len == 0 && start > 0) || (len > 0 && start > end)) {
         resp.statusCode = HttpStatus.requestedRangeNotSatisfiable;
         return;
       }
       resp.statusCode = HttpStatus.partialContent;
     }
     final filename = Uri.encodeComponent(p.basename(path));
+    if (len == 0) {
+      await _addStream(resp, f, filename, 0, 0, 0, 0, 0);
+    } else {
+      await _addStream(resp, f, filename, start, end, end - start + 1, end + 1, len);
+    }
+  }
+
+  Future<void> _addStream(HttpResponse resp, File f, String filename, int start, int contentEnd, int contentLen,
+      int fileEnd, int len) async {
     resp.headers
       ..contentType = ContentType.binary
-      ..contentLength = end - start + 1
+      ..contentLength = contentLen
       ..add(HttpHeaders.acceptRangesHeader, 'bytes')
-      ..add(HttpHeaders.contentRangeHeader, 'bytes ${start}-${end}/${len}')
+      ..add(HttpHeaders.contentRangeHeader, 'bytes ${start}-${contentEnd}/${len}')
       ..add('Content-Disposition', 'attachment;filename="${filename}";filename*="utf-8\'\'${filename}"');
-    await resp.addStream(f.openRead(start, end + 1));
+    await resp.addStream(f.openRead(start, fileEnd));
   }
 }
