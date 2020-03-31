@@ -11,6 +11,7 @@ import 'file_item.dart';
 import 'util.dart';
 
 class Server {
+  static const action_download = 'download';
   static final _date_format = DateFormat('y/MM/dd HH:mm:ss');
 
   final String _home;
@@ -74,7 +75,7 @@ class Server {
         }
         break;
       case FileSystemEntityType.file:
-        await _responseFile(resp, localPath, req.headers[HttpHeaders.rangeHeader]);
+        await _responseFile(req, resp, localPath);
         break;
       default:
         resp.statusCode = HttpStatus.notFound;
@@ -105,9 +106,9 @@ class Server {
     // 检查权限
     try {
       await for (var entity in Directory(path).list(followLinks: false)) {
+        final stat = await entity.stat();
         var basename = p.basename(entity.path);
         if (_all_files || !isFileHidden(basename)) {
-          final stat = await entity.stat();
           if (stat.type == FileSystemEntityType.directory) {
             dirs.add(basename + '/');
           } else {
@@ -121,15 +122,15 @@ class Server {
     }
     dirs.sort(comparePath);
     files.sort((a, b) => comparePath(a.name, b.name));
-    resp.headers.contentType = ContentType.html;
-    _writeHtml(resp, uriPath, dirs, files);
+    _writeFileListHtml(resp, uriPath, dirs, files);
   }
 
-  void _writeHtml(HttpResponse resp, String path, List<String> dirs, List<FileItem> files) {
+  void _writeFileListHtml(HttpResponse resp, String path, List<String> dirs, List<FileItem> files) {
     final title = 'Directory listing for ${path}';
     final dirToHtml = (String dir) => '<li><a href="${dir}">${dir}</a></li>';
     final fileToHtml = (FileItem item) =>
-        '<li><a href="${item.name}">${item.name}</a>&nbsp;<span>(${filesize(item.length)})</span></li>';
+        '<li><a href="${item.name}">${item.name}</a>&nbsp;<span>(${filesize(item.length)})</span>&nbsp;<a href="${item.name}?action=${action_download}">下载</a></li>';
+    resp.headers.contentType = ContentType.html;
     resp
       ..write('<head>')
       ..write('<meta name="viewport" content="width=device-width,initial-scale=1.0,minimum-scale=1.0"/>')
@@ -154,8 +155,8 @@ class Server {
       ..write('</body>');
   }
 
-  Future<void> _responseFile(HttpResponse resp, String path, List<String> ranges) async {
-    final f = File(path);
+  Future<void> _responseFile(HttpRequest req, HttpResponse resp, String localPath) async {
+    final f = File(localPath);
     // 检查权限
     try {
       final fs = f.openRead(0, 0);
@@ -167,56 +168,77 @@ class Server {
     final len = await f.length();
     var start = 0;
     var end = len - 1;
+    final ranges = req.headers[HttpHeaders.rangeHeader];
     if (ranges != null) {
       if (ranges.length != 1) {
         resp.statusCode = HttpStatus.requestedRangeNotSatisfiable;
         return;
       }
-      // 这里不用正则表达式了，性能差
-      final range = ranges[0];
-      if (!range.startsWith('bytes=')) {
+      final range = _Range.parse(ranges[0], len);
+      if (range == null) {
         resp.statusCode = HttpStatus.requestedRangeNotSatisfiable;
         return;
       }
-      // bytes= 后面
-      var index = 6;
-      var lastIndex = checkLastNumber(range, index);
-      if (lastIndex == index) {
-        resp.statusCode = HttpStatus.requestedRangeNotSatisfiable;
-        return;
-      }
-      if (lastIndex == range.length || range[lastIndex] != '-') {
-        resp.statusCode = HttpStatus.requestedRangeNotSatisfiable;
-        return;
-      }
-      start = parseInt(range, index, lastIndex);
-      index = lastIndex + 1;
-      lastIndex = checkLastNumber(range, index);
-      if (lastIndex != index) {
-        end = min(parseInt(range, index, lastIndex), end);
-      }
-      if ((len == 0 && start > 0) || (len > 0 && start > end)) {
-        resp.statusCode = HttpStatus.requestedRangeNotSatisfiable;
-        return;
-      }
+      start = range.start;
+      end = range.ent;
       resp.statusCode = HttpStatus.partialContent;
     }
-    final filename = Uri.encodeComponent(p.basename(path));
+    final down = req.uri.queryParameters['action'] == action_download;
     if (len == 0) {
-      await _addStream(resp, f, filename, 0, 0, 0, 0, 0);
+      await _addStream(resp, f, 0, 0, 0, 0, 0, down);
     } else {
-      await _addStream(resp, f, filename, start, end, end - start + 1, end + 1, len);
+      await _addStream(resp, f, start, end, end - start + 1, end + 1, len, down);
     }
   }
 
-  Future<void> _addStream(HttpResponse resp, File f, String filename, int start, int contentEnd, int contentLen,
-      int fileEnd, int len) async {
+  Future<void> _addStream(
+      HttpResponse resp, File f, int start, int contentEnd, int contentLen, int fileEnd, int len, bool down) async {
+    final type = lookupMimeType(f.path);
     resp.headers
-      ..contentType = ContentType.binary
+      ..contentType = type != null ? ContentType.parse(type) : ContentType.binary
       ..contentLength = contentLen
       ..add(HttpHeaders.acceptRangesHeader, 'bytes')
-      ..add(HttpHeaders.contentRangeHeader, 'bytes ${start}-${contentEnd}/${len}')
-      ..add('Content-Disposition', 'attachment;filename="${filename}";filename*="utf-8\'\'${filename}"');
+      ..add(HttpHeaders.contentRangeHeader, 'bytes ${start}-${contentEnd}/${len}');
+    if (down) {
+      final filename = Uri.encodeComponent(p.basename(f.path));
+      resp.headers.add('Content-Disposition', 'attachment;filename="${filename}";filename*="utf-8\'\'${filename}"');
+    }
     await resp.addStream(f.openRead(start, fileEnd));
+  }
+}
+
+class _Range {
+  final int start;
+  final int ent;
+
+  _Range(this.start, this.ent);
+
+  static _Range parse(String range, int len) {
+    // 这里不用正则表达式了，性能差
+    if (!range.startsWith('bytes=')) {
+      return null;
+    }
+    // bytes= 后面
+    var index = 6;
+    var lastIndex = checkLastNumber(range, index);
+    if (lastIndex == index) {
+      return null;
+    }
+    if (lastIndex == range.length || range[lastIndex] != '-') {
+      return null;
+    }
+    final start = parseInt(range, index, lastIndex);
+    index = lastIndex + 1;
+    lastIndex = checkLastNumber(range, index);
+    var end = 0;
+    if (lastIndex == index) {
+      end = len - 1;
+    } else {
+      end = min(parseInt(range, index, lastIndex), len - 1);
+    }
+    if ((len == 0 && start > 0) || (len > 0 && start > end)) {
+      return null;
+    }
+    return _Range(start, end);
   }
 }
