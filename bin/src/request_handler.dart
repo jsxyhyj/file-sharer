@@ -1,7 +1,6 @@
 import 'dart:io';
 
 import 'package:filesize/filesize.dart';
-import 'package:http_server/http_server.dart';
 import 'package:mime/mime.dart';
 import 'package:path/path.dart' as p;
 
@@ -11,6 +10,8 @@ import 'server_config.dart';
 import 'util.dart';
 
 class RequestHandler extends BaseRequestHandler {
+  static const _header_content_disposition = 'content-disposition';
+
   static const _param_action = 'action';
   static const _param_boundary = 'boundary';
   static const _param_filename = 'filename';
@@ -45,10 +46,13 @@ class RequestHandler extends BaseRequestHandler {
   Future<void> doPost(HttpRequest req, HttpResponse resp, String uriPath) async {
     final localPath = _getLocalPath(uriPath);
     var boundary = req.headers.contentType.parameters[_param_boundary];
-    var stream = await MimeMultipartTransformer(boundary).bind(req).map(HttpMultipartFormData.parse);
-    await for (var data in stream) {
-      final filename = data.contentDisposition.parameters[_param_filename];
-      await _writeMultiPartFormDataToFile(data, File(p.join(localPath, filename)));
+    var stream = await MimeMultipartTransformer(boundary).bind(req);
+    await for (var multipart in stream) {
+      if (multipart.headers.containsKey(_header_content_disposition)) {
+        final header = HeaderValue.parse(multipart.headers[_header_content_disposition]);
+        final filename = header.parameters[_param_filename];
+        await _writeMultipartToFile(multipart, p.join(localPath, filename));
+      }
     }
     await resp.redirect(req.uri, status: HttpStatus.movedPermanently);
   }
@@ -58,12 +62,10 @@ class RequestHandler extends BaseRequestHandler {
     return localPath;
   }
 
-  Future<void> _writeMultiPartFormDataToFile(HttpMultipartFormData data, File f) async {
-    final ios = f.openWrite();
+  Future<void> _writeMultipartToFile(MimeMultipart multipart, String path) async {
+    final ios = File(path).openWrite();
     try {
-      await for (var part in data) {
-        ios.add(part);
-      }
+      await ios.addStream(multipart);
       await ios.flush();
     } finally {
       await ios.close();
@@ -119,7 +121,7 @@ class RequestHandler extends BaseRequestHandler {
       ..write('<h2>${title}</h2>')
       ..write('<hr>')
       ..write('<form method="post" enctype="multipart/form-data" onsubmit="return upload();">')
-      ..write('<input id="fname" name="fname" type="file">')
+      ..write('<input id="fname" name="fname" type="file" multiple>')
       ..write('<input type="submit" value="上传">')
       ..write('</form>')
       ..write('<ul>')
@@ -183,7 +185,8 @@ class RequestHandler extends BaseRequestHandler {
       ..add(HttpHeaders.acceptRangesHeader, 'bytes');
     if (down) {
       final filename = Uri.encodeComponent(p.basename(f.path));
-      resp.headers.add('Content-Disposition', 'attachment;filename="${filename}";filename*="utf-8\'\'${filename}"');
+      resp.headers
+          .add(_header_content_disposition, 'attachment;filename="${filename}";filename*="utf-8\'\'${filename}"');
     }
   }
 

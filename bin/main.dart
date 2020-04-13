@@ -29,7 +29,7 @@ Future<void> main(List<String> args) async {
     return;
   }
   if (results['version']) {
-    stdout.writeln('${Platform.executable} 1.0.3');
+    stdout.writeln('${Platform.executable} 1.0.4');
     return;
   }
   final config = ServerConfig(getUserHomeDirectory(), isDebug ? 80 : 8000, false);
