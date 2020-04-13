@@ -1,5 +1,9 @@
 import 'dart:io';
 
+const isDebug = bool.fromEnvironment('dart.vm.product');
+
+String getUserHomeDirectory() => Platform.environment[Platform.isWindows ? 'USERPROFILE' : 'HOME'];
+
 // 判断文件是否是隐藏文件，暂不支持 windows
 bool isFileHidden(String path) {
   if (Platform.isWindows) {
