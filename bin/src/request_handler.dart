@@ -142,18 +142,24 @@ class RequestHandler extends BaseRequestHandler {
       resp.statusCode = HttpStatus.unauthorized;
       return;
     }
-    final len = await f.length();
     final down = req.uri.queryParameters[_param_action] == _action_download;
-    _addHeadersForFile(resp, f, len, down);
+    _addHeadersForFile(resp, f, down);
     final ranges = req.headers[HttpHeaders.rangeHeader];
     if (ranges == null) {
-      await _addStream(resp, f, 0, len);
-      return;
+      final len = await f.length();
+      resp.headers.contentLength = len;
+      await resp.addStream(f.openRead());
+    } else {
+      await _responseFileRange(resp, f, ranges);
     }
+  }
+
+  Future<void> _responseFileRange(HttpResponse resp, File f, List<String> ranges) async {
     if (ranges.length != 1) {
       resp.statusCode = HttpStatus.requestedRangeNotSatisfiable;
       return;
     }
+    final len = await f.length();
     var start = _getRangeStart(ranges[0]);
     if (start == null) {
       resp.statusCode = HttpStatus.requestedRangeNotSatisfiable;
@@ -164,12 +170,13 @@ class RequestHandler extends BaseRequestHandler {
       end = len - 1;
     }
     resp.statusCode = HttpStatus.partialContent;
+    resp.headers.contentLength = end - start + 1;
     if (len == 0) {
       _addContentRangeHeader(resp, 0, 0, 0);
       await _addStream(resp, f, 0, 0);
     } else {
       _addContentRangeHeader(resp, start, end, len);
-      await _addStream(resp, f, start, end);
+      await _addStream(resp, f, start, end + 1);
     }
   }
 
@@ -177,11 +184,10 @@ class RequestHandler extends BaseRequestHandler {
     await resp.addStream(f.openRead(start, end));
   }
 
-  void _addHeadersForFile(HttpResponse resp, File f, int len, bool down) {
+  void _addHeadersForFile(HttpResponse resp, File f, bool down) {
     final type = lookupMimeType(f.path);
     resp.headers
       ..contentType = type != null ? ContentType.parse(type) : ContentType.binary
-      ..contentLength = len
       ..add(HttpHeaders.acceptRangesHeader, 'bytes');
     if (down) {
       final filename = Uri.encodeComponent(p.basename(f.path));
