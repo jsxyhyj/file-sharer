@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:filesize/filesize.dart';
@@ -77,7 +78,7 @@ class RequestHandler extends BaseRequestHandler {
     final files = <FileItem>[];
     // 检查权限
     try {
-      await _listDir(Directory(localPath), dirs, files);
+      await _listDir(localPath, dirs, files);
     } on FileSystemException {
       resp.statusCode = HttpStatus.unauthorized;
       return;
@@ -88,8 +89,8 @@ class RequestHandler extends BaseRequestHandler {
     resp.write(_generateHtml(uriPath, dirs, files));
   }
 
-  Future<void> _listDir(Directory parent, List<String> dirs, List<FileItem> files) async {
-    await for (var entity in parent.list(followLinks: false)) {
+  Future<void> _listDir(String parent, List<String> dirs, List<FileItem> files) async {
+    await for (var entity in Directory(parent).list(followLinks: false)) {
       final stat = await entity.stat();
       var basename = p.basename(entity.path);
       if (config.all_files || !isFileHidden(basename)) {
@@ -103,16 +104,27 @@ class RequestHandler extends BaseRequestHandler {
   }
 
   String _generateHtml(String uriPath, List<String> dirs, List<FileItem> files) {
-    final title = 'Directory listing for ${uriPath}';
-    final dirToHtml = (String dir) => '<li><a href="${dir}">${dir}</a></li>';
-    final fileToHtml = (FileItem item) =>
-        '<li><a href="${item.name}" target="_blank">${item.name}</a>&nbsp;<span>(${filesize(item.length)})</span>&nbsp;<a href="${item.name}?action=${_action_download}" style="font-size:smaller">下载</a></li>';
+    final dirToHtml = (String dir) {
+      dir = htmlEscape.convert(dir);
+      return '<li><a href="${dir}">${dir}</a></li>';
+    };
+    final fileToHtml = (FileItem item) {
+      final name = htmlEscape.convert(item.name);
+      final len = filesize(item.length);
+      final aDownload = '<a href="${name}?action=${_action_download}">下载</a>';
+      return '<li><a href="${name}" target="_blank">${name}</a>&nbsp;<span>(${len})&nbsp;${aDownload}</span></li>';
+    };
+
+    final title = htmlEscape.convert('Directory listing for ${uriPath}');
+
     final sb = StringBuffer()
+      ..write('<html>')
       ..write('<head>')
       ..write('<meta name="viewport" content="width=device-width,initial-scale=1.0,minimum-scale=1.0"/>')
       ..write('<title>${title}</title>')
-      ..write(
-          '<style type="text/css">a{text-decoration:none} a:hover{text-decoration:underline} span{color:#666666;font-size:smaller}</style>')
+      ..write('<style type="text/css">')
+      ..write('a{text-decoration:none} a:hover{text-decoration:underline} span{color:#555555;font-size:smaller}')
+      ..write('</style>')
       ..write('<script type="text/javascript">')
       ..write('function upload(){var e=document.getElementById(\'fname\');return e.files[0]!=null;}')
       ..write('</script>')
@@ -125,10 +137,11 @@ class RequestHandler extends BaseRequestHandler {
       ..write('<input type="submit" value="上传">')
       ..write('</form>')
       ..write('<ul>')
-      ..writeAll(dirs.map<String>(dirToHtml))
-      ..writeAll(files.map<String>(fileToHtml))
+      ..writeAll(dirs.map(dirToHtml))
+      ..writeAll(files.map(fileToHtml))
       ..write('</ul>')
-      ..write('</body>');
+      ..write('</body>')
+      ..write('</html>');
     return sb.toString();
   }
 
