@@ -5,11 +5,19 @@ const isDebug = bool.fromEnvironment('dart.vm.product');
 String getUserHomeDirectory() => Platform.environment[Platform.isWindows ? 'USERPROFILE' : 'HOME'];
 
 // 判断文件是否是隐藏文件，暂不支持 windows
-bool isFileHidden(String path) {
+bool isFileHidden(String filename) {
   if (Platform.isWindows) {
     return false;
   }
-  return path.startsWith('.');
+  return filename.startsWith('.');
+}
+
+// 判断路径中是否有隐藏路径，暂不支持 Windows
+bool isPathHidden(String path) {
+  if (Platform.isWindows) {
+    return false;
+  }
+  return path.contains('/.');
 }
 
 int comparePath(String a, String b) {

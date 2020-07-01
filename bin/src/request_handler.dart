@@ -25,6 +25,10 @@ class RequestHandler extends BaseRequestHandler {
   @override
   Future<void> doGet(HttpRequest req, HttpResponse resp, String uriPath) async {
     final localPath = _getLocalPath(uriPath);
+    if (!config.all_files && isPathHidden(localPath)) {
+      resp.statusCode = HttpStatus.notFound;
+      return;
+    }
     final stat = await FileStat.stat(localPath);
     switch (stat.type) {
       case FileSystemEntityType.directory:
@@ -46,6 +50,10 @@ class RequestHandler extends BaseRequestHandler {
   @override
   Future<void> doPost(HttpRequest req, HttpResponse resp, String uriPath) async {
     final localPath = _getLocalPath(uriPath);
+    if (!config.all_files && isPathHidden(localPath)) {
+      resp.statusCode = HttpStatus.notFound;
+      return;
+    }
     var boundary = req.headers.contentType.parameters[_param_boundary];
     var stream = await MimeMultipartTransformer(boundary).bind(req);
     await for (var multipart in stream) {
@@ -112,7 +120,7 @@ class RequestHandler extends BaseRequestHandler {
       final name = htmlEscape.convert(item.name);
       final len = filesize(item.length);
       final aDownload = '<a href="${name}?action=${_action_download}">下载</a>';
-      return '<li><a href="${name}" target="_blank">${name}</a>&nbsp;<span>(${len})&nbsp;${aDownload}</span></li>';
+      return '<li><a href="${name}" target="_blank">${name}</a>&nbsp;<span>(${len})</span>${aDownload}</li>';
     };
 
     final title = htmlEscape.convert('Directory listing for ${uriPath}');
